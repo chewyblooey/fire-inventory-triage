@@ -44,6 +44,11 @@ tailwind.config = {
   .cluster-item.selected-keep { border-left-color: #22c55e; }
   .cluster-item.selected-remove { border-left-color: #ef4444; }
   .cluster-item.selected-merge { border-left-color: #f97316; }
+  .rename-input, .notes-input { background: #0a0a0a; border: 1px solid #262626; color: #fafafa; border-radius: 0.75rem; padding: 0.5rem 0.75rem; font-size: 0.875rem; width: 100%; margin-top: 0.25rem; }
+  .rename-input:focus, .notes-input:focus { outline: none; border-color: #f97316; }
+  .notes-input { min-height: 3rem; resize: vertical; }
+  .edit-fields { margin-top: 1rem; padding-top: 0.75rem; border-top: 1px solid #262626; }
+  .decided-badge { display: inline-block; font-size: 0.65rem; padding: 2px 8px; border-radius: 4px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; }
 </style>
 </head>
 <body class="min-h-screen">
@@ -104,8 +109,8 @@ const QUEUE_META = {
 };
 
 function loadState() {
-  try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || { decisions: {}, lastQueue: 'kill' }; }
-  catch { return { decisions: {}, lastQueue: 'kill' }; }
+  try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || { decisions: {}, renames: {}, notes: {}, lastQueue: 'kill' }; }
+  catch { return { decisions: {}, renames: {}, notes: {}, lastQueue: 'kill' }; }
 }
 
 function saveState() {
@@ -211,11 +216,18 @@ function sectionBadge(sec) {
 
 function navButtons(decisionKey) {
   const decided = !!state.decisions[decisionKey];
+  const total = getQueueItems(currentQueue).length;
   return `
-    <div class="flex justify-between mt-4 pt-3 border-t border-border">
-      <button onclick="navPrev()" class="text-sm text-muted hover:text-textPrimary transition" ${currentIndex === 0 ? 'disabled style="opacity:0.3"' : ''}>← Previous</button>
-      <span class="text-sm text-muted">${currentIndex + 1} of ${getQueueItems(currentQueue).length}</span>
-      <button onclick="navNext()" class="text-sm text-muted hover:text-textPrimary transition">Next →</button>
+    <div class="flex justify-between items-center mt-4 pt-3 border-t border-border">
+      <button onclick="navPrev()" class="text-sm text-muted hover:text-textPrimary transition" ${currentIndex === 0 ? 'disabled style="opacity:0.3"' : ''}>← Prev</button>
+      <div class="flex items-center gap-2">
+        <input type="number" min="1" max="${total}" value="${currentIndex+1}" onchange="jumpTo(parseInt(this.value)-1)" class="w-14 text-center text-sm bg-bg border border-border rounded-lg p-1 text-textPrimary">
+        <span class="text-sm text-muted">of ${total}</span>
+      </div>
+      <div class="flex gap-3">
+        <button onclick="navNextUndecided()" class="text-xs text-accent hover:text-orange-300 transition" title="Jump to next undecided">Next ⏭️</button>
+        <button onclick="navNext()" class="text-sm text-muted hover:text-textPrimary transition">Next →</button>
+      </div>
     </div>
   `;
 }
@@ -224,6 +236,43 @@ function navPrev() { if (currentIndex > 0) { currentIndex--; renderCard(); } }
 function navNext() {
   const items = getQueueItems(currentQueue);
   if (currentIndex < items.length - 1) { currentIndex++; renderCard(); }
+}
+function jumpTo(idx) { currentIndex = idx; renderCard(); }
+function navNextUndecided() { currentIndex = findNextUndecided(currentQueue); render(); }
+
+function getRename(id) { return state.renames?.[id] || ''; }
+function getNote(id) { return state.notes?.[id] || ''; }
+function saveRename(id) {
+  if (!state.renames) state.renames = {};
+  const val = document.getElementById('rename_' + id)?.value?.trim();
+  if (val) state.renames[id] = val; else delete state.renames[id];
+  saveState();
+}
+function saveNote(id) {
+  if (!state.notes) state.notes = {};
+  const val = document.getElementById('note_' + id)?.value?.trim();
+  if (val) state.notes[id] = val; else delete state.notes[id];
+  saveState();
+}
+
+function editFieldsHtml(item) {
+  return `<div class="edit-fields">
+    <label class="text-xs text-muted block mb-1">Rename item (optional):</label>
+    <input type="text" id="rename_${item.id}" class="rename-input" placeholder="${escHtml(item.desc)}" value="${escHtml(getRename(item.id))}" onchange="saveRename('${item.id}')" onblur="saveRename('${item.id}')">
+    <label class="text-xs text-muted block mb-1 mt-3">Notes for Voldo:</label>
+    <textarea id="note_${item.id}" class="notes-input" placeholder="Add context, corrections, details..." onchange="saveNote('${item.id}')" onblur="saveNote('${item.id}')">${escHtml(getNote(item.id))}</textarea>
+  </div>`;
+}
+
+function decisionBadgeHtml(id) {
+  const d = state.decisions[id];
+  if (!d) return '';
+  const action = typeof d === 'string' ? d : d.action;
+  const colors = { keep: 'bg-success/30 text-success', remove: 'bg-danger/30 text-danger', assign: 'bg-accent/30 text-accent', priced: 'bg-success/30 text-success', skip: 'bg-yellow-600/30 text-yellow-500', duplicate: 'bg-yellow-600/30 text-yellow-500' };
+  let label = action;
+  if (action === 'assign' && d.room) label = `→ ${d.room}`;
+  if (action === 'priced' && d.price) label = `$${d.price}`;
+  return `<span class="decided-badge ${colors[action] || 'bg-border text-muted'}">${label}</span>`;
 }
 
 function renderKillCard(item) {
@@ -236,9 +285,10 @@ function renderKillCard(item) {
         </div>
         <span class="text-sm text-muted">Row ${item.row}</span>
       </div>
-      <h3 class="text-lg font-semibold mb-2">${escHtml(item.desc)}</h3>
+      <h3 class="text-lg font-semibold mb-2">${escHtml(item.desc)} ${decisionBadgeHtml(item.id)}</h3>
       <p class="text-sm text-textSecondary mb-1"><strong>Reason flagged:</strong> ${escHtml(item.reason)}</p>
       ${item.replacement_cost ? `<p class="text-sm text-muted">Listed cost: ${item.replacement_cost}</p>` : ''}
+      ${editFieldsHtml(item)}
       <div class="flex gap-3 mt-5">
         <button onclick="decide('${item.id}','remove')" class="flex-1 py-3 rounded-xl font-semibold text-sm transition ${existing==='remove' ? 'bg-danger text-white' : 'bg-danger/20 text-danger hover:bg-danger/30'}">
           🗑️ Remove It
@@ -284,6 +334,8 @@ function renderDupeCard(cluster, idx) {
 
   cluster.items.forEach(it => {
     const d = existing[it.id] || '';
+    const renameVal = getRename(it.id);
+    const noteVal = getNote(it.id);
     html += `<div class="cluster-item ${d ? 'selected-'+d : ''} p-3 bg-bg rounded-lg" id="ci_${it.id}">
       <div class="flex justify-between items-start mb-2">
         <div>
@@ -291,10 +343,12 @@ function renderDupeCard(cluster, idx) {
           <div class="text-xs text-muted mt-1">${sectionBadge(it.section)} ${itemBadge(it)} Row ${it.row} · ${it.replacement_cost || 'no price'}</div>
         </div>
       </div>
-      <div class="flex gap-2">
+      <div class="flex gap-2 mb-2">
         <button onclick="decideDupeItem('${key}','${it.id}','keep',${idx})" class="px-3 py-1 text-xs rounded-lg transition ${d==='keep' ? 'bg-success text-white' : 'bg-success/10 text-success hover:bg-success/20'}">Keep (unique)</button>
         <button onclick="decideDupeItem('${key}','${it.id}','remove',${idx})" class="px-3 py-1 text-xs rounded-lg transition ${d==='remove' ? 'bg-danger text-white' : 'bg-danger/10 text-danger hover:bg-danger/20'}">Remove (dupe)</button>
       </div>
+      <input type="text" class="rename-input text-xs" placeholder="Rename..." value="${escHtml(renameVal)}" onchange="saveRenameInline('${it.id}',this.value)" onblur="saveRenameInline('${it.id}',this.value)">
+      <textarea class="notes-input text-xs mt-1" style="min-height:2rem" placeholder="Notes..." onchange="saveNoteInline('${it.id}',this.value)" onblur="saveNoteInline('${it.id}',this.value)">${escHtml(noteVal)}</textarea>
     </div>`;
   });
 
@@ -316,6 +370,19 @@ function decideDupeItem(clusterKey, itemId, action, idx) {
   state.decisions[clusterKey][itemId] = action;
   saveState();
   renderDupeCard(getQueueItems('duplicates')[idx], idx);
+}
+
+function saveRenameInline(id, val) {
+  if (!state.renames) state.renames = {};
+  val = val.trim();
+  if (val) state.renames[id] = val; else delete state.renames[id];
+  saveState();
+}
+function saveNoteInline(id, val) {
+  if (!state.notes) state.notes = {};
+  val = val.trim();
+  if (val) state.notes[id] = val; else delete state.notes[id];
+  saveState();
 }
 
 function finalizeDupe(key) {
@@ -342,9 +409,10 @@ function renderRoomCard(item) {
         </div>
         <span class="text-sm text-muted">Row ${item.row}</span>
       </div>
-      <h3 class="text-lg font-semibold mb-2">${escHtml(item.desc)}</h3>
+      <h3 class="text-lg font-semibold mb-2">${escHtml(item.desc)} ${decisionBadgeHtml(item.id)}</h3>
       ${item.replacement_cost ? `<p class="text-sm text-muted mb-1">Cost: ${item.replacement_cost}</p>` : ''}
       ${existingNote}${suggestedNote}
+      ${editFieldsHtml(item)}
       <div class="mt-4">
         <label class="text-sm text-textSecondary block mb-2">Assign to room:</label>
         <select id="roomSelect" class="w-full p-3 rounded-xl border border-border text-sm">
@@ -392,13 +460,14 @@ function renderPriceCard(item) {
         </div>
         <span class="text-sm text-muted">Row ${item.row}</span>
       </div>
-      <h3 class="text-lg font-semibold mb-2">${escHtml(item.desc)}</h3>
+      <h3 class="text-lg font-semibold mb-2">${escHtml(item.desc)} ${decisionBadgeHtml(item.id)}</h3>
       <div class="text-sm text-muted space-y-1 mb-4">
         ${item.brand ? `<p>Brand: ${escHtml(item.brand)}</p>` : ''}
         ${item.qty ? `<p>Qty: ${item.qty}</p>` : ''}
         ${item.condition ? `<p>Condition: ${item.condition}</p>` : ''}
         ${item.unit_cost ? `<p>Original cost: ${item.unit_cost}</p>` : ''}
       </div>
+      ${editFieldsHtml(item)}
       <div class="mt-4">
         <label class="text-sm text-textSecondary block mb-2">Replacement cost ($):</label>
         <input type="text" id="priceInput" placeholder="e.g. 49.99" value="${existing?.price || ''}" class="w-full p-3 rounded-xl border border-border bg-bg text-textPrimary text-sm">
@@ -466,6 +535,8 @@ function exportDecisions() {
   const output = {
     exported: new Date().toISOString(),
     decisions: state.decisions,
+    renames: state.renames || {},
+    notes: state.notes || {},
     summary: {}
   };
   
