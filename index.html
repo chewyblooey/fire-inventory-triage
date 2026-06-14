@@ -1,0 +1,521 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>920 Inventory Triage</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+tailwind.config = {
+  theme: {
+    extend: {
+      colors: {
+        bg: '#0a0a0a',
+        card: '#141414',
+        cardHover: '#1a1a1a',
+        border: '#262626',
+        accent: '#f97316',
+        accentDim: '#c2410c',
+        danger: '#ef4444',
+        success: '#22c55e',
+        muted: '#737373',
+        textPrimary: '#fafafa',
+        textSecondary: '#a3a3a3',
+      }
+    }
+  }
+}
+</script>
+<style>
+  * { box-sizing: border-box; }
+  body { background: #0a0a0a; color: #fafafa; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; }
+  .queue-btn { transition: all 0.15s; }
+  .queue-btn:hover { transform: translateY(-1px); }
+  .queue-btn.active { border-color: #f97316; background: rgba(249,115,22,0.1); }
+  .card-enter { animation: cardIn 0.2s ease-out; }
+  @keyframes cardIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+  .progress-fill { transition: width 0.3s ease; }
+  select { background-color: #1a1a1a; color: #fafafa; }
+  .badge { font-size: 0.65rem; padding: 2px 6px; border-radius: 4px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; }
+  .toast { animation: toastIn 0.3s ease, toastOut 0.3s ease 2s forwards; }
+  @keyframes toastIn { from { opacity: 0; transform: translateY(20px); } }
+  @keyframes toastOut { to { opacity: 0; transform: translateY(20px); } }
+  .cluster-item { border-left: 3px solid #262626; }
+  .cluster-item.selected-keep { border-left-color: #22c55e; }
+  .cluster-item.selected-remove { border-left-color: #ef4444; }
+  .cluster-item.selected-merge { border-left-color: #f97316; }
+</style>
+</head>
+<body class="min-h-screen">
+
+<div id="app" class="max-w-3xl mx-auto px-4 py-6">
+  <!-- Header -->
+  <div class="mb-6">
+    <h1 class="text-2xl font-bold mb-1">920 Inventory Triage</h1>
+    <p class="text-textSecondary text-sm">Work through each queue. Progress saves automatically.</p>
+  </div>
+
+  <!-- Queue Selector -->
+  <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6" id="queueSelector"></div>
+
+  <!-- Progress Bar -->
+  <div class="mb-6">
+    <div class="flex justify-between text-sm mb-1">
+      <span id="progressLabel" class="text-textSecondary">-</span>
+      <span id="progressCount" class="text-textSecondary">-</span>
+    </div>
+    <div class="w-full bg-border rounded-full h-2">
+      <div id="progressBar" class="progress-fill bg-accent rounded-full h-2" style="width:0%"></div>
+    </div>
+  </div>
+
+  <!-- Card Area -->
+  <div id="cardArea"></div>
+
+  <!-- Export -->
+  <div class="mt-8 pt-6 border-t border-border">
+    <div class="flex flex-wrap gap-3">
+      <button onclick="exportDecisions()" class="px-4 py-2 bg-accent text-white rounded-lg text-sm font-medium hover:bg-accentDim transition">
+        Export All Decisions
+      </button>
+      <button onclick="resetQueue()" class="px-4 py-2 bg-card border border-border text-textSecondary rounded-lg text-sm hover:text-textPrimary transition">
+        Reset Current Queue
+      </button>
+      <span id="savedCount" class="text-muted text-sm self-center ml-auto"></span>
+    </div>
+  </div>
+</div>
+
+<!-- Toast Container -->
+<div id="toasts" class="fixed bottom-6 right-6 flex flex-col gap-2 z-50"></div>
+
+<script src="data.js"></script>
+<script>
+const STORAGE_KEY = '920_triage_v1';
+let state = loadState();
+let currentQueue = state.lastQueue || 'kill';
+let currentIndex = 0;
+
+const QUEUE_META = {
+  kill: { label: 'Remove', icon: '🗑️', desc: 'Items that are likely not durable household goods' },
+  duplicates: { label: 'Duplicates', icon: '🔁', desc: 'Items that appear to be duplicated — keep, merge, or remove' },
+  room_sort: { label: 'Room Sort', icon: '🏠', desc: 'Miscellaneous items that need a proper room assignment' },
+  price_fill: { label: 'Pricing', icon: '💰', desc: 'Items missing replacement cost' }
+};
+
+function loadState() {
+  try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || { decisions: {}, lastQueue: 'kill' }; }
+  catch { return { decisions: {}, lastQueue: 'kill' }; }
+}
+
+function saveState() {
+  state.lastQueue = currentQueue;
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  updateSavedCount();
+}
+
+function updateSavedCount() {
+  const n = Object.keys(state.decisions).length;
+  document.getElementById('savedCount').textContent = n > 0 ? `${n} decisions saved locally` : '';
+}
+
+function getQueueItems(queue) {
+  if (queue === 'duplicates') return TRIAGE_DATA.queues.duplicates;
+  return TRIAGE_DATA.queues[queue] || [];
+}
+
+function getQueueProgress(queue) {
+  const items = getQueueItems(queue);
+  let done = 0;
+  if (queue === 'duplicates') {
+    items.forEach((cl, i) => { if (state.decisions[`dupe_${i}`]) done++; });
+  } else {
+    items.forEach(it => { if (state.decisions[it.id]) done++; });
+  }
+  return { done, total: items.length };
+}
+
+function renderQueueSelector() {
+  const el = document.getElementById('queueSelector');
+  el.innerHTML = '';
+  for (const [key, meta] of Object.entries(QUEUE_META)) {
+    const p = getQueueProgress(key);
+    const pct = p.total > 0 ? Math.round(p.done / p.total * 100) : 0;
+    const isActive = currentQueue === key;
+    const btn = document.createElement('button');
+    btn.className = `queue-btn p-3 rounded-xl border text-left ${isActive ? 'active border-accent bg-accent/10' : 'border-border bg-card hover:bg-cardHover'}`;
+    btn.innerHTML = `
+      <div class="text-lg mb-1">${meta.icon}</div>
+      <div class="font-semibold text-sm">${meta.label}</div>
+      <div class="text-xs text-muted mt-1">${p.done}/${p.total} · ${pct}%</div>
+    `;
+    btn.onclick = () => { currentQueue = key; currentIndex = findNextUndecided(key); render(); };
+    el.appendChild(btn);
+  }
+}
+
+function findNextUndecided(queue) {
+  const items = getQueueItems(queue);
+  for (let i = 0; i < items.length; i++) {
+    const key = queue === 'duplicates' ? `dupe_${i}` : items[i].id;
+    if (!state.decisions[key]) return i;
+  }
+  return 0;
+}
+
+function updateProgress() {
+  const p = getQueueProgress(currentQueue);
+  const pct = p.total > 0 ? Math.round(p.done / p.total * 100) : 0;
+  document.getElementById('progressLabel').textContent = `${QUEUE_META[currentQueue].icon} ${QUEUE_META[currentQueue].desc}`;
+  document.getElementById('progressCount').textContent = `${p.done} of ${p.total} (${pct}%)`;
+  document.getElementById('progressBar').style.width = pct + '%';
+}
+
+function renderCard() {
+  const area = document.getElementById('cardArea');
+  const items = getQueueItems(currentQueue);
+
+  if (items.length === 0) {
+    area.innerHTML = `<div class="text-center py-12 text-muted">No items in this queue</div>`;
+    return;
+  }
+
+  const p = getQueueProgress(currentQueue);
+  if (p.done >= p.total) {
+    area.innerHTML = `
+      <div class="text-center py-12">
+        <div class="text-4xl mb-3">✅</div>
+        <div class="text-xl font-bold mb-2">Queue Complete!</div>
+        <div class="text-textSecondary">All ${p.total} items in this queue have been decided.</div>
+        <button onclick="currentIndex=0;render()" class="mt-4 px-4 py-2 bg-card border border-border rounded-lg text-sm hover:bg-cardHover transition">Review from start</button>
+      </div>`;
+    return;
+  }
+
+  if (currentIndex >= items.length) currentIndex = findNextUndecided(currentQueue);
+
+  if (currentQueue === 'kill') renderKillCard(items[currentIndex]);
+  else if (currentQueue === 'duplicates') renderDupeCard(items[currentIndex], currentIndex);
+  else if (currentQueue === 'room_sort') renderRoomCard(items[currentIndex]);
+  else if (currentQueue === 'price_fill') renderPriceCard(items[currentIndex]);
+}
+
+function itemBadge(it) {
+  const colors = { amazon: 'bg-yellow-900 text-yellow-300', bevelmade: 'bg-purple-900 text-purple-300', 'personal-and-insurance': 'bg-blue-900 text-blue-300' };
+  return `<span class="badge ${colors[it.source] || 'bg-neutral-800 text-neutral-400'}">${it.source || 'unknown'}</span>`;
+}
+
+function sectionBadge(sec) {
+  return `<span class="badge bg-neutral-800 text-neutral-400">${sec}</span>`;
+}
+
+function navButtons(decisionKey) {
+  const decided = !!state.decisions[decisionKey];
+  return `
+    <div class="flex justify-between mt-4 pt-3 border-t border-border">
+      <button onclick="navPrev()" class="text-sm text-muted hover:text-textPrimary transition" ${currentIndex === 0 ? 'disabled style="opacity:0.3"' : ''}>← Previous</button>
+      <span class="text-sm text-muted">${currentIndex + 1} of ${getQueueItems(currentQueue).length}</span>
+      <button onclick="navNext()" class="text-sm text-muted hover:text-textPrimary transition">Next →</button>
+    </div>
+  `;
+}
+
+function navPrev() { if (currentIndex > 0) { currentIndex--; renderCard(); } }
+function navNext() {
+  const items = getQueueItems(currentQueue);
+  if (currentIndex < items.length - 1) { currentIndex++; renderCard(); }
+}
+
+function renderKillCard(item) {
+  const existing = state.decisions[item.id];
+  document.getElementById('cardArea').innerHTML = `
+    <div class="card-enter bg-card border border-border rounded-2xl p-6">
+      <div class="flex items-start justify-between mb-3">
+        <div class="flex gap-2 items-center">
+          ${itemBadge(item)} ${sectionBadge(item.section)}
+        </div>
+        <span class="text-sm text-muted">Row ${item.row}</span>
+      </div>
+      <h3 class="text-lg font-semibold mb-2">${escHtml(item.desc)}</h3>
+      <p class="text-sm text-textSecondary mb-1"><strong>Reason flagged:</strong> ${escHtml(item.reason)}</p>
+      ${item.replacement_cost ? `<p class="text-sm text-muted">Listed cost: ${item.replacement_cost}</p>` : ''}
+      <div class="flex gap-3 mt-5">
+        <button onclick="decide('${item.id}','remove')" class="flex-1 py-3 rounded-xl font-semibold text-sm transition ${existing==='remove' ? 'bg-danger text-white' : 'bg-danger/20 text-danger hover:bg-danger/30'}">
+          🗑️ Remove It
+        </button>
+        <button onclick="decide('${item.id}','keep')" class="flex-1 py-3 rounded-xl font-semibold text-sm transition ${existing==='keep' ? 'bg-success text-white' : 'bg-success/20 text-success hover:bg-success/30'}">
+          ✅ Keep It
+        </button>
+      </div>
+      ${navButtons(item.id)}
+    </div>
+  `;
+}
+
+function renderDupeCard(cluster, idx) {
+  const key = `dupe_${idx}`;
+  const existing = state.decisions[key] || {};
+  const allItems = [...cluster.items, ...(cluster.proper_matches || [])];
+  
+  let html = `<div class="card-enter bg-card border border-border rounded-2xl p-6">
+    <div class="flex items-start justify-between mb-3">
+      <span class="badge bg-orange-900 text-orange-300">${cluster.type} match</span>
+      <span class="text-sm text-muted">${cluster.items.length} items${cluster.proper_matches?.length ? ` + ${cluster.proper_matches.length} already placed` : ''}</span>
+    </div>
+    <h3 class="text-lg font-semibold mb-4">"${escHtml(cluster.match_desc)}"</h3>
+    <p class="text-xs text-muted mb-3">For each item below: is this a unique item you owned, a duplicate to remove, or should it merge with another?</p>
+    <div class="space-y-2">`;
+
+  if (cluster.proper_matches?.length) {
+    html += `<div class="text-xs text-success mb-2 font-semibold">✓ Already in proper sections:</div>`;
+    cluster.proper_matches.forEach(pm => {
+      html += `<div class="cluster-item p-3 bg-success/5 rounded-lg border border-success/20">
+        <div class="flex justify-between items-start">
+          <div>
+            <div class="text-sm font-medium">${escHtml(pm.desc)}</div>
+            <div class="text-xs text-muted mt-1">${sectionBadge(pm.section)} ${itemBadge(pm)} ${pm.replacement_cost || 'no price'}</div>
+          </div>
+          <span class="text-xs text-success">PLACED</span>
+        </div>
+      </div>`;
+    });
+    html += `<div class="text-xs text-textSecondary mt-3 mb-2 font-semibold">In miscellaneous (needs decision):</div>`;
+  }
+
+  cluster.items.forEach(it => {
+    const d = existing[it.id] || '';
+    html += `<div class="cluster-item ${d ? 'selected-'+d : ''} p-3 bg-bg rounded-lg" id="ci_${it.id}">
+      <div class="flex justify-between items-start mb-2">
+        <div>
+          <div class="text-sm font-medium">${escHtml(it.desc)}</div>
+          <div class="text-xs text-muted mt-1">${sectionBadge(it.section)} ${itemBadge(it)} Row ${it.row} · ${it.replacement_cost || 'no price'}</div>
+        </div>
+      </div>
+      <div class="flex gap-2">
+        <button onclick="decideDupeItem('${key}','${it.id}','keep',${idx})" class="px-3 py-1 text-xs rounded-lg transition ${d==='keep' ? 'bg-success text-white' : 'bg-success/10 text-success hover:bg-success/20'}">Keep (unique)</button>
+        <button onclick="decideDupeItem('${key}','${it.id}','remove',${idx})" class="px-3 py-1 text-xs rounded-lg transition ${d==='remove' ? 'bg-danger text-white' : 'bg-danger/10 text-danger hover:bg-danger/20'}">Remove (dupe)</button>
+      </div>
+    </div>`;
+  });
+
+  const allDecided = cluster.items.every(it => existing[it.id]);
+  html += `</div>
+    <div class="mt-4">
+      <button onclick="finalizeDupe('${key}')" class="w-full py-3 rounded-xl font-semibold text-sm transition ${allDecided ? 'bg-accent text-white hover:bg-accentDim' : 'bg-border text-muted cursor-not-allowed'}" ${allDecided ? '' : 'disabled'}>
+        Confirm & Next →
+      </button>
+    </div>
+    ${navButtons(key)}
+  </div>`;
+
+  document.getElementById('cardArea').innerHTML = html;
+}
+
+function decideDupeItem(clusterKey, itemId, action, idx) {
+  if (!state.decisions[clusterKey]) state.decisions[clusterKey] = {};
+  state.decisions[clusterKey][itemId] = action;
+  saveState();
+  renderDupeCard(getQueueItems('duplicates')[idx], idx);
+}
+
+function finalizeDupe(key) {
+  state.decisions[key]._finalized = true;
+  saveState();
+  toast('Cluster decided');
+  currentIndex = findNextUndecided('duplicates');
+  render();
+}
+
+function renderRoomCard(item) {
+  const existing = state.decisions[item.id];
+  const rooms = TRIAGE_DATA.rooms;
+  const existingNote = item.existing_in ? `<p class="text-xs text-yellow-500 mb-3">⚠️ Similar item already exists in: ${item.existing_in.join(', ')}</p>` : '';
+  const suggestedNote = item.suggested_room ? `<p class="text-xs text-success mb-3">💡 Suggested: ${item.suggested_room}</p>` : '';
+
+  let roomOptions = rooms.map(r => `<option value="${r}" ${(existing?.room || item.suggested_room) === r ? 'selected' : ''}>${r}</option>`).join('');
+
+  document.getElementById('cardArea').innerHTML = `
+    <div class="card-enter bg-card border border-border rounded-2xl p-6">
+      <div class="flex items-start justify-between mb-3">
+        <div class="flex gap-2 items-center">
+          ${itemBadge(item)} ${sectionBadge(item.section)}
+        </div>
+        <span class="text-sm text-muted">Row ${item.row}</span>
+      </div>
+      <h3 class="text-lg font-semibold mb-2">${escHtml(item.desc)}</h3>
+      ${item.replacement_cost ? `<p class="text-sm text-muted mb-1">Cost: ${item.replacement_cost}</p>` : ''}
+      ${existingNote}${suggestedNote}
+      <div class="mt-4">
+        <label class="text-sm text-textSecondary block mb-2">Assign to room:</label>
+        <select id="roomSelect" class="w-full p-3 rounded-xl border border-border text-sm">
+          <option value="">— Select room —</option>
+          ${roomOptions}
+        </select>
+      </div>
+      <div class="flex gap-3 mt-5">
+        <button onclick="decideRoom('${item.id}','remove')" class="flex-1 py-3 rounded-xl font-semibold text-sm transition ${existing?.action==='remove' ? 'bg-danger text-white' : 'bg-danger/20 text-danger hover:bg-danger/30'}">
+          🗑️ Remove
+        </button>
+        <button onclick="decideRoom('${item.id}','duplicate')" class="flex-1 py-3 rounded-xl font-semibold text-sm transition ${existing?.action==='duplicate' ? 'bg-yellow-600 text-white' : 'bg-yellow-600/20 text-yellow-500 hover:bg-yellow-600/30'}">
+          🔁 Duplicate
+        </button>
+        <button onclick="decideRoom('${item.id}','assign')" class="flex-1 py-3 rounded-xl font-semibold text-sm transition ${existing?.action==='assign' ? 'bg-success text-white' : 'bg-success/20 text-success hover:bg-success/30'}">
+          ✅ Assign
+        </button>
+      </div>
+      ${navButtons(item.id)}
+    </div>
+  `;
+}
+
+function decideRoom(id, action) {
+  if (action === 'assign') {
+    const room = document.getElementById('roomSelect').value;
+    if (!room) { toast('Pick a room first', 'warn'); return; }
+    state.decisions[id] = { action: 'assign', room };
+  } else {
+    state.decisions[id] = { action };
+  }
+  saveState();
+  toast(action === 'remove' ? 'Marked for removal' : action === 'duplicate' ? 'Marked as duplicate' : 'Room assigned');
+  currentIndex = findNextUndecided(currentQueue);
+  render();
+}
+
+function renderPriceCard(item) {
+  const existing = state.decisions[item.id];
+  document.getElementById('cardArea').innerHTML = `
+    <div class="card-enter bg-card border border-border rounded-2xl p-6">
+      <div class="flex items-start justify-between mb-3">
+        <div class="flex gap-2 items-center">
+          ${itemBadge(item)} ${sectionBadge(item.section)}
+        </div>
+        <span class="text-sm text-muted">Row ${item.row}</span>
+      </div>
+      <h3 class="text-lg font-semibold mb-2">${escHtml(item.desc)}</h3>
+      <div class="text-sm text-muted space-y-1 mb-4">
+        ${item.brand ? `<p>Brand: ${escHtml(item.brand)}</p>` : ''}
+        ${item.qty ? `<p>Qty: ${item.qty}</p>` : ''}
+        ${item.condition ? `<p>Condition: ${item.condition}</p>` : ''}
+        ${item.unit_cost ? `<p>Original cost: ${item.unit_cost}</p>` : ''}
+      </div>
+      <div class="mt-4">
+        <label class="text-sm text-textSecondary block mb-2">Replacement cost ($):</label>
+        <input type="text" id="priceInput" placeholder="e.g. 49.99" value="${existing?.price || ''}" class="w-full p-3 rounded-xl border border-border bg-bg text-textPrimary text-sm">
+      </div>
+      <div class="flex gap-3 mt-5">
+        <button onclick="decidePrice('${item.id}','remove')" class="flex-1 py-3 rounded-xl font-semibold text-sm transition ${existing?.action==='remove' ? 'bg-danger text-white' : 'bg-danger/20 text-danger hover:bg-danger/30'}">
+          🗑️ Remove
+        </button>
+        <button onclick="decidePrice('${item.id}','skip')" class="flex-1 py-3 rounded-xl font-semibold text-sm transition ${existing?.action==='skip' ? 'bg-yellow-600 text-white' : 'bg-yellow-600/20 text-yellow-500 hover:bg-yellow-600/30'}">
+          ⏭️ Skip
+        </button>
+        <button onclick="decidePrice('${item.id}','priced')" class="flex-1 py-3 rounded-xl font-semibold text-sm transition ${existing?.action==='priced' ? 'bg-success text-white' : 'bg-success/20 text-success hover:bg-success/30'}">
+          💰 Set Price
+        </button>
+      </div>
+      ${navButtons(item.id)}
+    </div>
+  `;
+}
+
+function decidePrice(id, action) {
+  if (action === 'priced') {
+    const price = document.getElementById('priceInput').value.trim().replace(/[$,]/g, '');
+    if (!price || isNaN(parseFloat(price))) { toast('Enter a valid price', 'warn'); return; }
+    state.decisions[id] = { action: 'priced', price };
+  } else {
+    state.decisions[id] = { action };
+  }
+  saveState();
+  toast(action === 'remove' ? 'Marked for removal' : action === 'skip' ? 'Skipped' : `Priced at $${state.decisions[id].price}`);
+  currentIndex = findNextUndecided(currentQueue);
+  render();
+}
+
+function decide(id, action) {
+  state.decisions[id] = action;
+  saveState();
+  toast(action === 'remove' ? 'Marked for removal' : 'Keeping');
+  currentIndex = findNextUndecided(currentQueue);
+  render();
+}
+
+function render() {
+  renderQueueSelector();
+  updateProgress();
+  renderCard();
+  updateSavedCount();
+}
+
+function resetQueue() {
+  if (!confirm(`Reset all decisions in "${QUEUE_META[currentQueue].label}"?`)) return;
+  const items = getQueueItems(currentQueue);
+  if (currentQueue === 'duplicates') {
+    items.forEach((_, i) => delete state.decisions[`dupe_${i}`]);
+  } else {
+    items.forEach(it => delete state.decisions[it.id]);
+  }
+  saveState();
+  currentIndex = 0;
+  render();
+  toast('Queue reset');
+}
+
+function exportDecisions() {
+  const output = {
+    exported: new Date().toISOString(),
+    decisions: state.decisions,
+    summary: {}
+  };
+  
+  // Build summary
+  for (const [queue, meta] of Object.entries(QUEUE_META)) {
+    const p = getQueueProgress(queue);
+    output.summary[queue] = { done: p.done, total: p.total };
+  }
+
+  const blob = new Blob([JSON.stringify(output, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `920-triage-export-${new Date().toISOString().slice(0,10)}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+  toast('Exported!');
+}
+
+function toast(msg, type = 'info') {
+  const el = document.createElement('div');
+  el.className = `toast px-4 py-2 rounded-lg text-sm font-medium ${type === 'warn' ? 'bg-yellow-900 text-yellow-300' : 'bg-card border border-border text-textPrimary'}`;
+  el.textContent = msg;
+  document.getElementById('toasts').appendChild(el);
+  setTimeout(() => el.remove(), 2500);
+}
+
+function escHtml(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+// Keyboard shortcuts
+document.addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+  if (e.key === 'ArrowLeft') navPrev();
+  if (e.key === 'ArrowRight') navNext();
+  if (currentQueue === 'kill') {
+    const items = getQueueItems('kill');
+    if (currentIndex < items.length) {
+      if (e.key === '1' || e.key === 'r') decide(items[currentIndex].id, 'remove');
+      if (e.key === '2' || e.key === 'k') decide(items[currentIndex].id, 'keep');
+    }
+  }
+});
+
+// Init
+currentIndex = findNextUndecided(currentQueue);
+render();
+</script>
+</body>
+</html>
