@@ -187,6 +187,18 @@ function renderCard() {
 
   if (currentIndex < 0 || currentIndex >= items.length) currentIndex = 0;
 
+  const p = getQueueProgress(currentQueue);
+  if (p.done >= p.total && currentIndex === findNextUndecided(currentQueue)) {
+    area.innerHTML = `
+      <div class="text-center py-12">
+        <div class="text-4xl mb-3">✅</div>
+        <div class="text-xl font-bold mb-2">Queue Complete!</div>
+        <div class="text-textSecondary">All ${p.total} items in this queue have been decided.</div>
+        <button onclick="reviewFromStart()" class="mt-4 px-4 py-2 bg-card border border-border rounded-lg text-sm hover:bg-cardHover transition">Review from start</button>
+      </div>`;
+    return;
+  }
+
   if (currentQueue === 'kill') renderKillCard(items[currentIndex]);
   else if (currentQueue === 'duplicates') renderDupeCard(items[currentIndex], currentIndex);
   else if (currentQueue === 'room_sort') renderRoomCard(items[currentIndex]);
@@ -225,7 +237,8 @@ function navNext() {
   const items = getQueueItems(currentQueue);
   if (currentIndex < items.length - 1) { currentIndex++; renderCard(); }
 }
-function jumpTo(idx) { currentIndex = idx; renderCard(); }
+function jumpTo(idx) { currentIndex = Math.max(0, Math.min(idx, getQueueItems(currentQueue).length - 1)); renderCard(); }
+function reviewFromStart() { currentIndex = 0; renderCard(); }
 function navNextUndecided() { currentIndex = findNextUndecided(currentQueue); render(); }
 
 function getRename(id) { return state.renames?.[id] || ''; }
