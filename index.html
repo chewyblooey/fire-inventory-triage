@@ -447,7 +447,8 @@ function decideRoom(id, action) {
   }
   saveState();
   toast(action === 'remove' ? 'Marked for removal' : action === 'duplicate' ? 'Marked as duplicate' : 'Room assigned');
-  currentIndex = findNextUndecided(currentQueue);
+  const items = getQueueItems(currentQueue);
+  if (currentIndex < items.length - 1) { currentIndex++; }
   render();
 }
 
@@ -499,7 +500,8 @@ function decidePrice(id, action) {
   }
   saveState();
   toast(action === 'remove' ? 'Marked for removal' : action === 'skip' ? 'Skipped' : `Priced at $${state.decisions[id].price}`);
-  currentIndex = findNextUndecided(currentQueue);
+  const items = getQueueItems(currentQueue);
+  if (currentIndex < items.length - 1) { currentIndex++; }
   render();
 }
 
@@ -507,7 +509,8 @@ function decide(id, action) {
   state.decisions[id] = action;
   saveState();
   toast(action === 'remove' ? 'Marked for removal' : 'Keeping');
-  currentIndex = findNextUndecided(currentQueue);
+  const items = getQueueItems(currentQueue);
+  if (currentIndex < items.length - 1) { currentIndex++; }
   render();
 }
 
