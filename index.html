@@ -185,19 +185,7 @@ function renderCard() {
     return;
   }
 
-  const p = getQueueProgress(currentQueue);
-  if (p.done >= p.total) {
-    area.innerHTML = `
-      <div class="text-center py-12">
-        <div class="text-4xl mb-3">✅</div>
-        <div class="text-xl font-bold mb-2">Queue Complete!</div>
-        <div class="text-textSecondary">All ${p.total} items in this queue have been decided.</div>
-        <button onclick="currentIndex=0;render()" class="mt-4 px-4 py-2 bg-card border border-border rounded-lg text-sm hover:bg-cardHover transition">Review from start</button>
-      </div>`;
-    return;
-  }
-
-  if (currentIndex >= items.length) currentIndex = findNextUndecided(currentQueue);
+  if (currentIndex < 0 || currentIndex >= items.length) currentIndex = 0;
 
   if (currentQueue === 'kill') renderKillCard(items[currentIndex]);
   else if (currentQueue === 'duplicates') renderDupeCard(items[currentIndex], currentIndex);
