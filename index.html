@@ -102,7 +102,7 @@ let currentQueue = state.lastQueue || 'kill';
 let currentIndex = 0;
 
 const QUEUE_META = {
-  kill: { label: 'Remove', icon: '🗑️', desc: 'Items that are likely not durable household goods' },
+  kill: { label: 'Verify', icon: '🔍', desc: 'Items to double-check — were these actually in the house?' },
   duplicates: { label: 'Duplicates', icon: '🔁', desc: 'Items that appear to be duplicated — keep, merge, or remove' },
   room_sort: { label: 'Room Sort', icon: '🏠', desc: 'Miscellaneous items that need a proper room assignment' },
   price_fill: { label: 'Pricing', icon: '💰', desc: 'Items missing replacement cost' }
@@ -286,7 +286,8 @@ function renderKillCard(item) {
         <span class="text-sm text-muted">Row ${item.row}</span>
       </div>
       <h3 class="text-lg font-semibold mb-2">${escHtml(item.desc)} ${decisionBadgeHtml(item.id)}</h3>
-      <p class="text-sm text-textSecondary mb-1"><strong>Reason flagged:</strong> ${escHtml(item.reason)}</p>
+      <p class="text-sm text-textSecondary mb-1"><strong>Why flagged:</strong> ${escHtml(item.reason)}</p>
+      <p class="text-xs text-muted mt-1">If this was in the house at the time of the fire, keep it — even consumables count.</p>
       ${item.replacement_cost ? `<p class="text-sm text-muted">Listed cost: ${item.replacement_cost}</p>` : ''}
       ${editFieldsHtml(item)}
       <div class="flex gap-3 mt-5">
