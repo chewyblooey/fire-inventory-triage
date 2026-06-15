@@ -94,7 +94,7 @@ tailwind.config = {
 <!-- Toast Container -->
 <div id="toasts" class="fixed bottom-6 right-6 flex flex-col gap-2 z-50"></div>
 
-<script src="data.js?v=5"></script>
+<script src="data.js?v=6"></script>
 <script>
 const STORAGE_KEY = '920_triage_v1';
 let state = loadState();
@@ -401,7 +401,7 @@ function renderRoomCard(item) {
   const existingNote = item.existing_in ? `<p class="text-xs text-yellow-500 mb-3">⚠️ Similar item already exists in: ${item.existing_in.join(', ')}</p>` : '';
   const suggestedNote = item.suggested_room ? `<p class="text-xs text-success mb-3">💡 Suggested: ${item.suggested_room}</p>` : '';
 
-  let roomOptions = rooms.map(r => `<option value="${r}" ${(existing?.room || item.suggested_room) === r ? 'selected' : ''}>${r}</option>`).join('');
+  let roomOptions = [...rooms].sort().map(r => `<option value="${r}" ${(existing?.room || item.suggested_room) === r ? 'selected' : ''}>${r}</option>`).join('');
 
   document.getElementById('cardArea').innerHTML = `
     <div class="card-enter bg-card border border-border rounded-2xl p-6">
